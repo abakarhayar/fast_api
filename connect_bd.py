@@ -1,8 +1,9 @@
+# connect_bd.py
 import os
 from dotenv import load_dotenv
 import sshtunnel
 from sqlalchemy import MetaData, Table, create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session
+from sqlalchemy.orm import sessionmaker
 
 # Charger les variables d'environnement depuis le fichier .env
 load_dotenv()
@@ -18,40 +19,25 @@ ssh_host = os.getenv('SSH_HOST')
 ssh_username = os.getenv('SSH_USERNAME')
 ssh_password = os.getenv('SSH_PASSWORD')
 
-class DatabaseConnection:
-    def __init__(self):
-        self.tunnel = None
-        self.engine = None
-        self.Session = None
-
-    def start_tunnel(self):
-        self.tunnel = sshtunnel.SSHTunnelForwarder(
+def get_db_session():
+    try:
+        tunnel = sshtunnel.SSHTunnelForwarder(
             (ssh_host),
             ssh_username=ssh_username, ssh_password=ssh_password,
             remote_bind_address=(db_host, 3306)
         )
-        self.tunnel.start()
-
-    def setup_engine(self):
-        database_url = f"mysql://{db_user}:{db_password}@127.0.0.1:{self.tunnel.local_bind_port}/{db_name}"
-        self.engine = create_engine(database_url)
-        self.Session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=self.engine))
-
-    def get_session(self):
-        return self.Session()
-
-    def close(self):
-        if self.Session:
-            self.Session.remove()
-        if self.tunnel:
-            self.tunnel.stop()
-
-db_conn = DatabaseConnection()
-db_conn.start_tunnel()
-db_conn.setup_engine()
+        tunnel.start()
+        database_url = f"mysql://{db_user}:{db_password}@127.0.0.1:{tunnel.local_bind_port}/{db_name}"
+        engine = create_engine(database_url)
+        Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        session = Session()
+        return session, tunnel
+    except Exception as e:
+        print("Erreur:", e)
+        raise
 
 def get_metadata():
-    session = db_conn.get_session()
+    session, tunnel = get_db_session()
     try:
         metadata1 = MetaData()
         metadata1.reflect(bind=session.bind, only=['olympic_hosts'])
@@ -64,8 +50,10 @@ def get_metadata():
         return {
             "olympic_hosts": olympic_hosts,
             "olympic_athletes": olympic_athletes,
-            "session": session
+            "session": session,
+            "tunnel": tunnel
         }
     except Exception as e:
         session.close()
+        tunnel.stop()
         raise e
